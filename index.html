@@ -15,6 +15,9 @@
     <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.3/build/global/luxon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+    
+    <!-- Chart.js Annotation Plugin untuk garis threshold -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
 
     <!-- SheetJS (untuk memproses file XLSX / CSV) -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -243,7 +246,7 @@
         const searchSensor = document.getElementById('searchSensor');
         const filterStatus = document.getElementById('filterStatus');
 
-        // Color Palette for Lines
+        // Color Palette for Lines (Fallback)
         const lineColors = [
             '#0f172a', '#475569', '#14b8a6', '#8b5cf6', 
             '#f59e0b', '#ec4899', '#0ea5e9', '#84cc16'
@@ -376,14 +379,11 @@
 
         // 3. Helper to parse complex Date string from CSV/Excel
         function parseCustomDate(val) {
-            // If already standard Date
             if (val instanceof Date) return luxon.DateTime.fromJSDate(val);
             
-            // Try standard string parse first
             let parsed = luxon.DateTime.fromJSDate(new Date(val));
             if (parsed.isValid) return parsed;
 
-            // Try specific formats from CSV snippet (e.g. "04/09/2026 12:15:00 PM")
             parsed = luxon.DateTime.fromFormat(val, "MM/dd/yyyy hh:mm:ss a");
             if (parsed.isValid) return parsed;
             
@@ -397,11 +397,9 @@
         function updateDashboard() {
             if (!luxonData || luxonData.length === 0) return;
 
-            // Get filter bounds
             const fStart = luxon.DateTime.fromISO(filterStart.value);
             const fEnd = luxon.DateTime.fromISO(filterEnd.value);
 
-            // Filter Data
             const filteredData = luxonData.filter(d => {
                 const m = d.time.toMillis();
                 return m >= fStart.toMillis() && m <= fEnd.toMillis();
@@ -419,17 +417,25 @@
             }
 
             const datasets = tempKeys.map((sensor, index) => {
-                const datasetColor = lineColors[index % lineColors.length];
+                let datasetColor = lineColors[index % lineColors.length];
+                
+                // PENGATURAN WARNA CUSTOM BERDASARKAN NAMA KOLOM/SENSOR
+                const lowerName = sensor.toLowerCase();
+                if (lowerName.includes('enter') || lowerName.includes('inlet') || lowerName.includes('masuk')) {
+                    datasetColor = '#ef4444'; // Red-ish
+                } else if (lowerName.includes('leav') || lowerName.includes('outlet') || lowerName.includes('keluar')) {
+                    datasetColor = '#3b82f6'; // Blue-ish
+                }
                 
                 return {
                     label: sensor,
                     data: data.map(d => ({ x: d.time.toJSDate(), y: d.values[sensor] })),
                     borderColor: datasetColor,
                     backgroundColor: datasetColor,
-                    borderWidth: 1, // Diubah agar garis lebih tipis dan tidak menumpuk
-                    tension: 0, // Diubah ke 0 agar garis lurus (lebih rapi untuk data padat)
-                    pointRadius: 0, // Dihilangkan sesuai permintaan (hanya garis)
-                    pointHoverRadius: 0 // Dihilangkan saat di-hover agar murni garis
+                    borderWidth: 1,
+                    tension: 0,
+                    pointRadius: 0, 
+                    pointHoverRadius: 0
                 };
             });
 
@@ -441,11 +447,48 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     interaction: {
-                        mode: 'nearest', // Diubah dari 'index' agar tooltip hanya menampilkan garis yang disorot
+                        mode: 'nearest', 
                         axis: 'x',
                         intersect: false,
                     },
                     plugins: {
+                        // SETTING ANNOTATION UNTUK GARIS HORIZONTAL AMBANG BATAS
+                        annotation: {
+                            annotations: {
+                                lineHigh: {
+                                    type: 'line',
+                                    yMin: threshHigh,
+                                    yMax: threshHigh,
+                                    borderColor: 'rgba(239, 68, 68, 0.4)', // Merah pudar (dashed)
+                                    borderWidth: 2,
+                                    borderDash: [5, 5],
+                                    label: {
+                                        display: true,
+                                        content: `Batas Atas (${threshHigh}°C)`,
+                                        position: 'start',
+                                        backgroundColor: 'rgba(239, 68, 68, 0.7)',
+                                        color: 'white',
+                                        font: { size: 10 }
+                                    }
+                                },
+                                lineLow: {
+                                    type: 'line',
+                                    yMin: threshLow,
+                                    yMax: threshLow,
+                                    borderColor: 'rgba(59, 130, 246, 0.4)', // Biru pudar (dashed)
+                                    borderWidth: 2,
+                                    borderDash: [5, 5],
+                                    label: {
+                                        display: true,
+                                        content: `Batas Bawah (${threshLow}°C)`,
+                                        position: 'start',
+                                        backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                                        color: 'white',
+                                        font: { size: 10 }
+                                    }
+                                }
+                            }
+                        },
                         legend: {
                             position: 'bottom',
                             labels: { boxWidth: 12, usePointStyle: true, font: {size: 11} },
@@ -473,7 +516,6 @@
                                     if (label) label += ': ';
                                     if (val !== null) label += val.toFixed(2) + ' °C';
                                     
-                                    // Custom Tooltip Text for Anomaly
                                     if (val > threshHigh) {
                                         label += ' 🔴 (Panas/High)';
                                     } else if (val < threshLow) {
@@ -500,7 +542,7 @@
                                 font: { size: 11 },
                                 maxRotation: 0,
                                 autoSkip: true,
-                                maxTicksLimit: 6 // Diperkecil agar label sumbu X tidak berdesakan
+                                maxTicksLimit: 6
                             }
                         },
                         y: {
@@ -530,14 +572,14 @@
             }
 
             const datasets = statusKeys.map((status, index) => {
-                const datasetColor = lineColors[(index + 4) % lineColors.length]; // Variasi warna berbeda
+                const datasetColor = lineColors[(index + 4) % lineColors.length]; 
                 return {
                     label: status,
                     data: data.map(d => ({ x: d.time.toJSDate(), y: d.values[status] })),
                     borderColor: datasetColor,
                     backgroundColor: datasetColor,
                     borderWidth: 1.5,
-                    stepped: true, // Garis kaku (stepped) cocok untuk nilai digital
+                    stepped: true, 
                     pointRadius: 0,
                     pointHoverRadius: 0
                 };
@@ -595,8 +637,8 @@
                             }
                         },
                         y: {
-                            min: -0.1, // Memberi sedikit padding bawah
-                            max: 1.1,  // Memberi sedikit padding atas
+                            min: -0.1, 
+                            max: 1.1,  
                             ticks: {
                                 stepSize: 1,
                                 callback: function(value) {
@@ -618,7 +660,6 @@
                 sortDesc = !sortDesc;
             } else {
                 sortCol = col;
-                // Default ke descending untuk angka/waktu, ascending untuk huruf
                 sortDesc = (col === 'sensor') ? false : true; 
             }
             renderTableView();
@@ -660,7 +701,6 @@
         function renderTableView() {
             anomalyTableBody.innerHTML = '';
             
-            // Apply Filter
             const searchTxt = searchSensor.value.toLowerCase();
             const statusVal = filterStatus.value;
 
@@ -670,7 +710,6 @@
                 return matchSearch && matchStatus;
             });
 
-            // Apply Sort
             filteredList.sort((a, b) => {
                 let valA, valB;
                 if (sortCol === 'time') {
@@ -686,7 +725,6 @@
                 return 0;
             });
 
-            // Update Sort Icons UI
             ['time', 'sensor', 'val'].forEach(col => {
                 const icon = document.getElementById(`sort-icon-${col}`);
                 if (icon) {
@@ -698,14 +736,12 @@
                 }
             });
 
-            // Update Counter
             if (filteredList.length !== globalAnomalyList.length) {
                 anomalyCountDisplay.textContent = `${filteredList.length} Ditampilkan (dari total ${globalAnomalyList.length})`;
             } else {
                 anomalyCountDisplay.textContent = `${filteredList.length} Ditemukan`;
             }
 
-            // Render Empty State
             if (filteredList.length === 0) {
                 let emptyMsg = globalAnomalyList.length === 0 
                     ? 'Tidak ada anomali yang terdeteksi pada rentang ini.'
@@ -721,7 +757,6 @@
                 return;
             }
 
-            // Populate Table Rows
             const fragment = document.createDocumentFragment();
             filteredList.forEach(item => {
                 const tr = document.createElement('tr');
